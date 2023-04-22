@@ -2,12 +2,19 @@ package ratelimit
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
 
 	"golang.org/x/time/rate"
 )
+
+func TestSetRetryAfterHeader(t *testing.T) {
+	h := http.Header{}
+	SetRetryAfterHeader(h, time.Second*5)
+	fmt.Printf("%+v\n", h)
+}
 
 func TestAllowNAndRetryAfter(t *testing.T) {
 
