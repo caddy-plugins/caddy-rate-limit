@@ -83,6 +83,7 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 	}
 
 	ruleLimitedKeys := make([]limitedItem, len(rl.Rules))
+	parsedHeaders := map[string]limitedItem{}
 
 	for index, rule := range rl.Rules {
 		limitedKey := ipAddress
@@ -92,9 +93,14 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 				IsIP: true,
 			}
 		} else {
-			var isIP bool
-			limitedKey, isIP = getLimitedKeyByHeader(r, rule)
-			ruleLimitedKeys[index] = limitedItem{Key: limitedKey, IsIP: isIP}
+			item, ok := parsedHeaders[rule.LimitByHeader]
+			if !ok {
+				var isIP bool
+				limitedKey, isIP = getLimitedKeyByHeader(r, rule)
+				item = limitedItem{Key: limitedKey, IsIP: isIP}
+				parsedHeaders[rule.LimitByHeader] = item
+			}
+			ruleLimitedKeys[index] = item
 		}
 		for _, res := range rule.Resources {
 
