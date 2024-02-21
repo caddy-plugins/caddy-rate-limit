@@ -1,12 +1,14 @@
 package ratelimit
 
 import (
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/admpub/caddy/caddyhttp/httpserver"
+	"github.com/admpub/realip"
 )
 
 // RateLimit is an http.Handler that can limit request rate to specific paths or files
@@ -27,6 +29,8 @@ type Rule struct {
 	LimitByHeader string
 	Status        string
 	Resources     []string
+
+	whitelistIPNets []*net.IPNet
 }
 
 const (
@@ -50,24 +54,48 @@ func ParseHTTPTime(value string) (time.Time, error) {
 	return time.Parse(HTTPTimeLayout, value)
 }
 
+func getLimitedKeyByHeader(r *http.Request, rule Rule) (string, bool) {
+	switch rule.LimitByHeader {
+	case realip.HeaderForwarded:
+		return realip.Default().ClientIP(r.RemoteAddr, r.Header.Get), true
+	case realip.HeaderXForwardedFor:
+		return realip.XRealIP(r.Header.Get(realip.HeaderXRealIP), r.Header.Get(realip.HeaderXForwardedFor), r.RemoteAddr), true
+	case realip.HeaderXRealIP:
+		return realip.XRealIP(r.Header.Get(realip.HeaderXRealIP), ``, r.RemoteAddr), true
+	default:
+		return r.Header.Get(rule.LimitByHeader), false
+	}
+}
+
+type limitedItem struct {
+	Key  string
+	IsIP bool
+}
+
 // ServeHTTP is the method handling every request
 func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextResponseStatus int, err error) {
 
 	retryAfter := time.Duration(0)
-	var limitedKey string
 	// get request ip address
 	ipAddress, err := GetRemoteIP(r)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
 
-	if len(limitedHeader) == 0 {
-		limitedKey = ipAddress
-	} else {
-		limitedKey = r.Header.Get(limitedHeader)
-	}
+	ruleLimitedKeys := make([]limitedItem, len(rl.Rules))
 
-	for _, rule := range rl.Rules {
+	for index, rule := range rl.Rules {
+		limitedKey := ipAddress
+		if len(rule.LimitByHeader) == 0 {
+			ruleLimitedKeys[index] = limitedItem{
+				Key:  ipAddress,
+				IsIP: true,
+			}
+		} else {
+			var isIP bool
+			limitedKey, isIP = getLimitedKeyByHeader(r, rule)
+			ruleLimitedKeys[index] = limitedItem{Key: limitedKey, IsIP: isIP}
+		}
 		for _, res := range rule.Resources {
 
 			// handle `ignore`
@@ -85,7 +113,7 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 			}
 
 			// handle whitelist ip & method mismatch
-			if IsWhitelistIPAddress(ipAddress, whitelistIPNets) || !MatchMethod(rule.Methods, r.Method) {
+			if IsWhitelistIPAddress(ipAddress, rule.whitelistIPNets) || !MatchMethod(rule.Methods, r.Method) {
 				continue
 			}
 
@@ -98,10 +126,10 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 			sliceKeysOnlyWithKey := buildKeysOnlyWithLimitedKey(limitedKey)
 			for _, keys := range sliceKeysOnlyWithKey {
 				keysJoined := strings.Join(keys, "|")
-				if caddyLimiter.HasLimiter(keysJoined) {
-					ret := caddyLimiter.Allow(keys, rule)
+				if limiter, ok := caddyLimiter.GetLimiterOk(keysJoined); ok {
+					ret := caddyLimiter.Allow(keys, rule, limiter)
 					if !ret {
-						retryAfter = caddyLimiter.RetryAfter(keys)
+						retryAfter = caddyLimiter.RetryAfter(keys, limiter)
 						SetRetryAfterHeader(w.Header(), retryAfter)
 						return http.StatusTooManyRequests, err
 					}
@@ -128,12 +156,16 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 	*/
 	nextResponseStatus, err = rl.Next.ServeHTTP(w, r)
 
-	for _, rule := range rl.Rules {
-
+	for index, rule := range rl.Rules {
 		// handle response status code mismatch
 		if len(rule.Status) == 0 || rule.Status == "*" || !MatchStatus(rule.Status, strconv.Itoa(nextResponseStatus)) {
 			continue
 		}
+		ipAddr := ipAddress
+		if ruleLimitedKeys[index].IsIP {
+			ipAddr = ruleLimitedKeys[index].Key
+		}
+		limitedKey := ruleLimitedKeys[index].Key
 		for _, res := range rule.Resources {
 
 			// handle `ignore`
@@ -151,7 +183,7 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 			}
 
 			// handle whitelist ip & method mismatch
-			if IsWhitelistIPAddress(ipAddress, whitelistIPNets) || !MatchMethod(rule.Methods, r.Method) {
+			if IsWhitelistIPAddress(ipAddr, rule.whitelistIPNets) || !MatchMethod(rule.Methods, r.Method) {
 				continue
 			}
 

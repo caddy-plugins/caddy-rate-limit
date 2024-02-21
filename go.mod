@@ -6,6 +6,7 @@ toolchain go1.21.6
 
 require (
 	github.com/admpub/caddy v1.2.0
+	github.com/admpub/realip v0.2.1
 	golang.org/x/time v0.3.0
 )
 

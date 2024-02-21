@@ -2,16 +2,12 @@ package ratelimit
 
 import (
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/admpub/caddy"
 	"github.com/admpub/caddy/caddyhttp/httpserver"
-)
-
-var (
-	whitelistIPNets []*net.IPNet
-	limitedHeader   string
 )
 
 func init() {
@@ -36,11 +32,8 @@ func setup(c *caddy.Controller) error {
 		for _, s := range rule.Whitelist {
 			_, ipNet, err := net.ParseCIDR(s)
 			if err == nil {
-				whitelistIPNets = append(whitelistIPNets, ipNet)
+				rule.whitelistIPNets = append(rule.whitelistIPNets, ipNet)
 			}
-		}
-		if len(rule.LimitByHeader) > 0 {
-			limitedHeader = rule.LimitByHeader
 		}
 	}
 
@@ -111,7 +104,7 @@ func rateLimitParse(c *caddy.Controller) (rules []Rule, err error) {
 					if len(args[0]) == 0 {
 						return rules, c.Errf("invalid limit_by_header")
 					}
-					rule.LimitByHeader = args[0]
+					rule.LimitByHeader = http.CanonicalHeaderKey(args[0])
 				case "status":
 					// TODO: check status code is valid
 					rule.Status = args[0]

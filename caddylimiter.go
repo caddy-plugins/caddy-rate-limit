@@ -21,16 +21,17 @@ func NewCaddyLimiter() *CaddyLimiter {
 }
 
 // Allow is just a shortcut for AllowN
-func (cl *CaddyLimiter) Allow(keys []string, rule Rule) bool {
+func (cl *CaddyLimiter) Allow(keys []string, rule Rule, limiter ...*rate.Limiter) bool {
 
-	return cl.AllowN(keys, rule, 1)
+	return cl.AllowN(keys, rule, 1, limiter...)
 }
 
 // AllowN check if n count are allowed for a specific key
-func (cl *CaddyLimiter) AllowN(keys []string, rule Rule, n int) bool {
-
+func (cl *CaddyLimiter) AllowN(keys []string, rule Rule, n int, limiter ...*rate.Limiter) bool {
+	if len(limiter) > 0 && limiter[0] != nil {
+		return limiter[0].AllowN(time.Now(), n)
+	}
 	keysJoined := strings.Join(keys, "|")
-
 	curLimiter, found := cl.GetLimiterOk(keysJoined)
 	if !found {
 		switch rule.Unit {
@@ -82,10 +83,15 @@ func (cl *CaddyLimiter) HasLimiter(key string) bool {
 }
 
 // RetryAfter return a helper message for client
-func (cl *CaddyLimiter) RetryAfter(keys []string) time.Duration {
-
-	keysJoined := strings.Join(keys, "|")
-	reserve := cl.GetLimiter(keysJoined).Reserve()
+func (cl *CaddyLimiter) RetryAfter(keys []string, limiter ...*rate.Limiter) time.Duration {
+	var curLimiter *rate.Limiter
+	if len(limiter) > 0 && limiter[0] != nil {
+		curLimiter = limiter[0]
+	} else {
+		keysJoined := strings.Join(keys, "|")
+		curLimiter = cl.GetLimiter(keysJoined)
+	}
+	reserve := curLimiter.Reserve()
 	defer reserve.Cancel()
 
 	if reserve.OK() {
