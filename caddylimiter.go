@@ -98,12 +98,8 @@ func (cl *CaddyLimiter) RetryAfter(keys []string) time.Duration {
 
 // Reserve will consume 1 token from `token bucket`
 func (cl *CaddyLimiter) Reserve(keys []string) bool {
-
 	keysJoined := strings.Join(keys, "|")
-	cl.RLock()
 	r := cl.GetLimiter(keysJoined).Reserve()
-	cl.RUnlock()
-
 	return r.OK()
 }
 
