@@ -9,14 +9,14 @@ import (
 )
 
 type CaddyLimiter struct {
-	Keys map[string]*rate.Limiter
-	sync.Mutex
+	keys map[string]*rate.Limiter
+	sync.RWMutex
 }
 
 func NewCaddyLimiter() *CaddyLimiter {
 
 	return &CaddyLimiter{
-		Keys: make(map[string]*rate.Limiter),
+		keys: make(map[string]*rate.Limiter),
 	}
 }
 
@@ -31,39 +31,61 @@ func (cl *CaddyLimiter) AllowN(keys []string, rule Rule, n int) bool {
 
 	keysJoined := strings.Join(keys, "|")
 
-	cl.Lock()
-
-	if _, found := cl.Keys[keysJoined]; !found {
-
+	curLimiter, found := cl.GetLimiterOk(keysJoined)
+	if !found {
 		switch rule.Unit {
 		case "second":
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Second.Seconds()), rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Second.Seconds()), rule.Burst)
 		case "minute":
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Minute.Seconds()), rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Minute.Seconds()), rule.Burst)
 		case "hour":
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Hour.Seconds()), rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(time.Hour.Seconds()), rule.Burst)
 		case "day":
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(24*time.Hour.Seconds()), rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(24*time.Hour.Seconds()), rule.Burst)
 		case "week":
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(7*24*time.Hour.Seconds()), rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Limit(rule.Rate)/rate.Limit(7*24*time.Hour.Seconds()), rule.Burst)
 		default:
 			// Infinite
-			cl.Keys[keysJoined] = rate.NewLimiter(rate.Inf, rule.Burst)
+			curLimiter = rate.NewLimiter(rate.Inf, rule.Burst)
 		}
+		cl.SetLimiter(keysJoined, curLimiter)
 	}
 
-	curLimiter := cl.Keys[keysJoined]
-
-	cl.Unlock()
-
 	return curLimiter.AllowN(time.Now(), n)
+}
+
+func (cl *CaddyLimiter) GetLimiter(key string) *rate.Limiter {
+	cl.RLock()
+	limiter := cl.keys[key]
+	cl.RUnlock()
+	return limiter
+}
+
+func (cl *CaddyLimiter) SetLimiter(key string, limiter *rate.Limiter) {
+	cl.Lock()
+	cl.keys[key] = limiter
+	cl.Unlock()
+}
+
+func (cl *CaddyLimiter) GetLimiterOk(key string) (*rate.Limiter, bool) {
+	cl.RLock()
+	limiter, ok := cl.keys[key]
+	cl.RUnlock()
+	return limiter, ok
+}
+
+func (cl *CaddyLimiter) HasLimiter(key string) bool {
+	cl.RLock()
+	_, ok := cl.keys[key]
+	cl.RUnlock()
+	return ok
 }
 
 // RetryAfter return a helper message for client
 func (cl *CaddyLimiter) RetryAfter(keys []string) time.Duration {
 
 	keysJoined := strings.Join(keys, "|")
-	reserve := cl.Keys[keysJoined].Reserve()
+	reserve := cl.GetLimiter(keysJoined).Reserve()
 	defer reserve.Cancel()
 
 	if reserve.OK() {
@@ -78,7 +100,10 @@ func (cl *CaddyLimiter) RetryAfter(keys []string) time.Duration {
 func (cl *CaddyLimiter) Reserve(keys []string) bool {
 
 	keysJoined := strings.Join(keys, "|")
-	r := cl.Keys[keysJoined].Reserve()
+	cl.RLock()
+	r := cl.GetLimiter(keysJoined).Reserve()
+	cl.RUnlock()
+
 	return r.OK()
 }
 

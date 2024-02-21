@@ -98,7 +98,7 @@ func (rl RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) (nextRespo
 			sliceKeysOnlyWithKey := buildKeysOnlyWithLimitedKey(limitedKey)
 			for _, keys := range sliceKeysOnlyWithKey {
 				keysJoined := strings.Join(keys, "|")
-				if _, found := caddyLimiter.Keys[keysJoined]; found {
+				if caddyLimiter.HasLimiter(keysJoined) {
 					ret := caddyLimiter.Allow(keys, rule)
 					if !ret {
 						retryAfter = caddyLimiter.RetryAfter(keys)
